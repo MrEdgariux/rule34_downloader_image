@@ -1,7 +1,17 @@
 from json import JSONDecodeError
+import json
 import requests, os
 
 def data(tags, page):
+
+    if 'kids' in tags:
+        print("You're not allowed to search for child pornography!")
+        os.system("pause")
+        exit(4)
+    if 'child' in tags:
+        print("You're not allowed to search for child pornography!")
+        os.system("pause")
+        exit(4)
     p = str(page)
 
     ats = requests.get('https://api.rule34.xxx/index.php?page=dapi&tags=' + tags + '&s=post&q=index&json=1&limit=1000&pid=' + p)
@@ -20,6 +30,8 @@ def data(tags, page):
 
 
 def download(ats, p, search_term):
+    downloaded_data = []
+    skaiciavimas = 0
     try:
         for i in ats:
             image_url = i["file_url"]
@@ -37,15 +49,22 @@ def download(ats, p, search_term):
                     img_data = requests.get(image_url).content
                     with open(__file__ + '/../images/' + search_term + '/' + str(p) + '/image_' + str(i["id"]) + dot, 'wb') as handler:
                         handler.write(img_data)
+                    downloaded_data.append(i['id'])
+                    skaiciavimas = skaiciavimas + 1
                     print("Downloaded: " + str(i['id']) + " success")
             else:
-                os.mkdir(__file__ + '/../images/')
+                if not os.path.isdir(__file__ + '/../images/'):
+                    os.mkdir(__file__ + '/../images/')
                 os.mkdir(__file__ + '/../images/' + search_term + '/')
                 os.mkdir(__file__ + '/../images/' + search_term + '/' + str(p) + '/')
                 img_data = requests.get(image_url).content
                 with open(__file__ + '/../images/' + search_term + '/' + str(p) + '/image_' + str(i["id"]) + dot, 'wb') as handler:
                     handler.write(img_data)
+                downloaded_data.append(i['id'])
+                skaiciavimas = skaiciavimas + 1
                 print("Downloaded: " + str(i['id']) + " success")
+        with open("data_list.json", "w") as outfile:
+            json.dump(downloaded_data, outfile)
         print("All images successfully downloaded.")
         os.system("pause")
     except KeyboardInterrupt:
