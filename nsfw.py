@@ -1,11 +1,9 @@
 from json import JSONDecodeError
-import json
 import requests, os
 import customtkinter as ctk
 import tkinter.messagebox as msg
 import threading
 import sys
-import xml.etree.ElementTree as ET
 
 ctk.set_appearance_mode("System")
 ctk.set_default_color_theme("blue")
@@ -81,7 +79,7 @@ def download(ats, search_term):
     if len(skipped_ids) != 0:
         print("Skipped: " + str(len(skipped_ids)) + " images with id's: ")
         for id in skipped_ids:
-            print(id + " ")
+            print(str(id))
     msg.showinfo("Downloading", "Successfully started to download " + str(skaiciavimas) + " images!")
 
 def my_thread(tags):
@@ -99,7 +97,7 @@ def my_thread(tags):
                 atsakas.extend(atsj)
                 if (len(atsj) < 1000):
                     atsa += len(atsj)
-                    info.configure(text="We found " + str(atsa) + " content to download, waiting for confirmation", font= ('Helvetica 13'))
+                    info.configure(text="We found " + str(atsa) + " content to download, waiting for confirmation")
                     # Ask for confirmation
                     confirmation = msg.askyesno("Start download?", "We found " + str(atsa) + " content, do you want download it?")
 
@@ -107,14 +105,14 @@ def my_thread(tags):
                     if confirmation:
                         print("You have confirmed, that you want to download " + str(atsa) + " content of " + tags)
                         download(atsakas, tags)
-                        info.configure(text="", font= ('Helvetica 13'))
+                        info.configure(text="")
                         break
                     else:
                         print("You have cancelled download " + str(atsa) + " content of " + tags)
                         errors.configure(text="You have cancelled your operation", font= ('Helvetica 13'))
-                        info.configure(text="", font= ('Helvetica 13'))
+                        info.configure(text="")
                         break
-                info.configure(text="We found " + str(atsa) + " content to download, loading more...", font= ('Helvetica 13'))
+                info.configure(text="We found " + str(atsa) + " content to download, loading more...")
                 p += 1
                 atsa += 1000
                 print(str(p) + " sekmingai pratęstas! Atsiųsta iš viso " + str(atsa))
@@ -130,7 +128,7 @@ def data():
     if (checkbox_1.get() == 1):
         t = threading.Thread(target=my_thread, args=(tags,))
         t.start()
-        info.configure(text="Content will be searched and this message will be updated with information!", font= ('Helvetica 13'))
+        info.configure(text="Content will be searched and this message will be updated with information!")
     else:
         pagea = page.get()
         if not pagea:
