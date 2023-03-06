@@ -46,6 +46,7 @@ def killdw():
 def download(ats, search_term):
     yra = len(ats)
     skaiciavimas = 0
+    skipped_ids = []
 
     location = __file__ + '/../images/' + search_term + '/'
 
@@ -61,7 +62,7 @@ def download(ats, search_term):
         
         if (os.path.isdir(location)):
             if (os.path.exists(location + 'image_' + str(i["id"]) + dot)):
-                print("File " + str(i['id']) + " exist, skipping.")
+                skipped_ids.append(i['id'])
                 yra = yra - 1
                 continue
             else:
@@ -77,7 +78,10 @@ def download(ats, search_term):
             t = threading.Thread(target=download_image, args=(image_url, location, i["id"], sema))
             t.start()
             skaiciavimas = skaiciavimas + 1
-    
+    if len(skipped_ids) != 0:
+        print("Skipped: " + str(len(skipped_ids)) + " images with id's: ")
+        for id in skipped_ids:
+            print(id + " ")
     msg.showinfo("Downloading", "Successfully started to download " + str(skaiciavimas) + " images!")
 
 def my_thread(tags):
