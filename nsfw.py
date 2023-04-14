@@ -13,7 +13,7 @@ def download_image(image_url, location, image_id, sema):
     dot = ".jpg"
     if '.gif' in image_url:
         dot = ".gif"
-    if '.mp4' in image_url or '.mkv' in image_url:
+    elif '.mp4' in image_url or '.mkv' in image_url:
         dot = ".mp4"
     
     try:
@@ -46,17 +46,20 @@ def download(ats, search_term):
     skaiciavimas = 0
     skipped_ids = []
 
-    location = __file__ + '/../images/' + search_term + '/'
-
-    
+    dlocation = __file__ + '/../'
     for i in ats:
         image_url = i["file_url"]
 
-        dot = ".jpg"
         if '.gif' in image_url:
             dot = ".gif"
-        if '.mp4' in image_url or '.mkv' in image_url:
+            location = dlocation + 'animations/'+ search_term + '/'
+        elif '.mp4' in image_url or '.mkv' in image_url:
             dot = ".mp4"
+            location = dlocation + 'videos/'+ search_term + '/'
+        else:
+            dot = ".jpg"
+            location = dlocation + 'images/' + search_term + '/'
+
         
         if (os.path.isdir(location)):
             if (os.path.exists(location + 'image_' + str(i["id"]) + dot)):
@@ -68,11 +71,21 @@ def download(ats, search_term):
                 t.start()
                 skaiciavimas = skaiciavimas + 1
         else:
-            if not os.path.isdir(__file__ + '/../images/'):
-                os.mkdir(__file__ + '/../images/')
-            if not os.path.isdir(__file__ + '/../images/' + search_term + '/'):
-                os.mkdir(__file__ + '/../images/' + search_term + '/')
-
+            if dot == ".gif":
+                if not os.path.isdir(__file__ + '/../animations/'):
+                    os.mkdir(__file__ + '/../animations/')
+                if not os.path.isdir(__file__ + '/../animations/' + search_term + '/'):
+                    os.mkdir(__file__ + '/../animations/' + search_term + '/')
+            elif dot == ".mp4":
+                if not os.path.isdir(__file__ + '/../videos/'):
+                    os.mkdir(__file__ + '/../videos/')
+                if not os.path.isdir(__file__ + '/../videos/' + search_term + '/'):
+                    os.mkdir(__file__ + '/../videos/' + search_term + '/')
+            else:
+                if not os.path.isdir(__file__ + '/../images/'):
+                    os.mkdir(__file__ + '/../images/')
+                if not os.path.isdir(__file__ + '/../images/' + search_term + '/'):
+                    os.mkdir(__file__ + '/../images/' + search_term + '/')
             t = threading.Thread(target=download_image, args=(image_url, location, i["id"], sema))
             t.start()
             skaiciavimas = skaiciavimas + 1
