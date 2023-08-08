@@ -174,22 +174,14 @@ def download(ats, search_term):
         if '.gif' in image_url:
             dot = ".gif"
             location = os.path.join(gif_loc, search_term)
-            c.execute("SELECT * FROM Animations WHERE image_id = ?", (i["id"],))
         elif '.mp4' in image_url or '.mkv' in image_url:
             dot = ".mp4"
             location = os.path.join(videos_loc, search_term)
-            c.execute("SELECT * FROM Videos WHERE image_id = ?", (i["id"],))
         else:
             dot = ".jpg"
             location = os.path.join(image_loc, search_term)
-            c.execute("SELECT * FROM Images WHERE image_id = ?", (i["id"],))
 
         # Iterate over the results and print them out
-        if len(c.fetchall()) > 0:
-            if os.path.exists(os.path.join(location, f"{prefix}{i['id']}{dot}")):
-                skipped_ids.append(i['id'])
-                yra = yra - 1
-                continue
         if (os.path.isdir(location)):
             if (os.path.exists(os.path.join(location, f"{prefix}{i['id']}{dot}"))):
                 skipped_ids.append(i['id'])
