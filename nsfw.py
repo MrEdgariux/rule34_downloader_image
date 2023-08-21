@@ -3,8 +3,8 @@ import json, requests, os, threading, sys, sqlite3, re, logging, configparser
 import customtkinter as ctk
 import tkinter.messagebox as msg
 
-version = "2.7"
-config_ver = "1.0"
+version = "2.8"
+config_ver = "1.1"
 
 def load_config():
     config = configparser.ConfigParser()
@@ -20,11 +20,11 @@ def create_config(ver, configver):
     config.set('Software', 'version', ver)
     config.set('Software', 'configversion', configver)
     config.add_section('File Paths')
-    config.set('File Paths', 'sqlite db folder', os.path.join(roaming_folder, 'nsfw_project'))
     config.set('File Paths', 'image folder', os.path.join(script_directory, 'images'))
     config.set('File Paths', 'videos folder', os.path.join(script_directory, 'videos'))
     config.set('File Paths', 'gif folder', os.path.join(script_directory, 'animations'))
     config.set('File Paths', 'logs folder', os.path.join(roaming_folder, 'nsfw_project', 'logs'))
+    config.set('File Paths', 'cache folder', os.path.join(roaming_folder, 'nsfw_project', 'cache'))
     config.add_section('File Naming')
     config.set('File Naming', 'prefix', 'image_')
     with open('config.ini', 'w') as configfile:
@@ -43,8 +43,12 @@ else:
 # -- Begin of config file loaders --
 
 path_logs = config.get('File Paths', 'logs folder')
+cache_fold = config.get('File Paths', 'cache folder')
 if not os.path.exists(path_logs):
     os.makedirs(path_logs)
+
+if not os.path.exists(cache_fold):
+    os.makedirs(cache_fold)
 
 # Logs Initiation
 logging.basicConfig(filename=os.path.join(path_logs, 'logs.log'), level=logging.INFO,
@@ -65,39 +69,7 @@ warn_handler.setLevel(logging.WARNING)
 warn_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
 warn_handler.setFormatter(warn_formatter)
 wl.addHandler(warn_handler)
-
-
-if not os.path.exists(config.get('File Paths', 'sqlite db folder')):
-    os.makedirs(config.get('File Paths', 'sqlite db folder'))
-    logging.info("Folder path for database created")
 # -- End of config file loaders --
-
-conn = sqlite3.connect(os.path.join(config.get('File Paths', 'sqlite db folder'), 'content.db'))
-c = conn.cursor()
-# Create the 'Images' table
-c.execute('''CREATE TABLE IF NOT EXISTS Images (
-                id INTEGER PRIMARY KEY,
-                image_id INTEGER,
-                entity TEXT,
-                datetime DATETIME DEFAULT CURRENT_TIMESTAMP)''')
-
-# Create the 'Videos' table
-c.execute('''CREATE TABLE IF NOT EXISTS Videos (
-                id INTEGER PRIMARY KEY,
-                image_id INTEGER,
-                entity TEXT,
-                datetime DATETIME DEFAULT CURRENT_TIMESTAMP)''')
-
-# Create the 'Animations' table
-c.execute('''CREATE TABLE IF NOT EXISTS Animations (
-                id INTEGER PRIMARY KEY,
-                image_id INTEGER,
-                entity TEXT,
-                datetime DATETIME DEFAULT CURRENT_TIMESTAMP)''')
-
-# Commit the changes to the database
-conn.commit()
-conn.close()
 
 left_images_download = 0
 total_images_need = 0
@@ -109,21 +81,52 @@ def sanitize_filename(filename):
     # Replace all characters that are not letters or digits with an underscore
     return re.sub(r'[^a-zA-Z0-9]', '_', filename)
 
-def download_image(image_url, entity, location, image_id, sema):
+def load_cache():
+    config = load_config()
+    cache_file = os.path.join(config.get('File Paths', 'cache folder'), "cache.json")
+    
+    if os.path.exists(cache_file):
+        with open(cache_file, 'r') as file:
+            return json.load(file)
+    else:
+        return {}
+    
+def check_cache(entity):
+    cache = load_cache()
+    if 'entity' not in cache:
+        cache['entity'] = {}
+    
+    if entity in cache['entity']:
+        return list(cache['entity'].values())
+    else:
+        return None
+
+def save_cache(data):
+    config = load_config()
+    cache_file = os.path.join(config.get('File Paths', 'cache folder'), "cache.json")
+    
+    with open(cache_file, 'w') as file:
+        json.dump(data, file, indent=4)
+
+def update_cache(entity, data):
+    cache = load_cache()
+    
+    if 'entity' not in cache:
+        cache['entity'] = {}
+        
+    cache['entity'][entity] = data
+    save_cache(cache)
+
+def download_image(image_url, location, image_id, sema):
     global left_images_download
     global total_images_need
     config = load_config()
     prefix = config.get("File Naming", 'prefix')
-    conna = sqlite3.connect(os.path.join(config.get('File Paths', 'sqlite db folder'), 'content.db'))
-    ca = conna.cursor()
     dot = ".jpg"
-    table = "Images"
     if '.gif' in image_url:
         dot = ".gif"
-        table = "Animations"
     elif '.mp4' in image_url or '.mkv' in image_url:
         dot = ".mp4"
-        table = "Videos"
     failed = False
     try:
         sema.acquire()
@@ -141,14 +144,10 @@ def download_image(image_url, entity, location, image_id, sema):
         if not failed:
             left_images_download -= 1
             progress_txt.configure(text="Download left: " + str(left_images_download))
-            query = "INSERT INTO {} (image_id, entity) VALUES (?,?)".format(table)
-            ca.execute(query, (image_id,entity))
-            conna.commit()
-        conna.close()
         sema.release()
         
 
-def download(ats, search_term):
+def download(ats, search_term, tipas):
     global left_images_download
     global total_images_need
     config = load_config()
@@ -157,8 +156,6 @@ def download(ats, search_term):
     elif total_images_need != 0 and left_images_download == 1:
         total_images_need = 0
         left_images_download = 0
-    conn = sqlite3.connect(os.path.join(config.get('File Paths', 'sqlite db folder'), 'content.db'))
-    c = conn.cursor()
     yra = len(ats)
     skipped_ids = []
     entity = search_term
@@ -169,56 +166,121 @@ def download(ats, search_term):
     videos_loc = config.get('File Paths', 'videos folder')
     prefix = config.get('File Naming', 'prefix')
     for i in ats:
-        image_url = i["file_url"]
-
-        if '.gif' in image_url:
-            dot = ".gif"
-            location = os.path.join(gif_loc, search_term)
-        elif '.mp4' in image_url or '.mkv' in image_url:
-            dot = ".mp4"
-            location = os.path.join(videos_loc, search_term)
-        else:
-            dot = ".jpg"
-            location = os.path.join(image_loc, search_term)
-
-        # Iterate over the results and print them out
-        if (os.path.isdir(location)):
-            if (os.path.exists(os.path.join(location, f"{prefix}{i['id']}{dot}"))):
-                skipped_ids.append(i['id'])
-                yra = yra - 1
-                continue
-            else:
-                left_images_download += 1
-                total_images_need += 1
-                t = threading.Thread(target=download_image, args=(image_url, entity, location, i["id"], sema))
-                t.start()
-        else:
-            if dot == ".gif":
-                if not os.path.isdir(os.path.join(gif_loc, search_term)):
-                    os.makedirs(os.path.join(gif_loc, search_term))
-            elif dot == ".mp4":
+        image_url = i['file_url']
+        if tipas != "All":
+            if tipas == "Videos" and '.mp4' in image_url:
+                dot = ".mp4"
                 if not os.path.isdir(os.path.join(videos_loc, search_term)):
                     os.makedirs(os.path.join(videos_loc, search_term))
-            else:
+                location = os.path.join(videos_loc, search_term)
+            
+            elif tipas == "Images" and '.jpg' in image_url:
+                dot = ".jpg"
                 if not os.path.isdir(os.path.join(image_loc, search_term)):
                     os.makedirs(os.path.join(image_loc, search_term))
-            left_images_download += 1
-            total_images_need += 1
-            t = threading.Thread(target=download_image, args=(image_url, entity, location, i["id"], sema))
-            t.start()
+                location = os.path.join(image_loc, search_term)
+
+            elif tipas == "Animations" and '.gif' in image_url:
+                dot = ".gif"
+                if not os.path.isdir(os.path.join(gif_loc, search_term)):
+                    os.makedirs(os.path.join(gif_loc, search_term))
+                location = os.path.join(gif_loc, search_term)
+            else:
+                continue
+
+            if (os.path.isdir(location)):
+                if (os.path.exists(os.path.join(location, f"{prefix}{i['id']}{dot}"))):
+                    skipped_ids.append(i['id'])
+                    yra = yra - 1
+                    continue
+                else:
+                    left_images_download += 1
+                    total_images_need += 1
+                    t = threading.Thread(target=download_image, args=(image_url, location, i["id"], sema))
+                    t.start()
+            else:
+                if dot == ".gif":
+                    if not os.path.isdir(os.path.join(gif_loc, search_term)):
+                        os.makedirs(os.path.join(gif_loc, search_term))
+                elif dot == ".mp4":
+                    if not os.path.isdir(os.path.join(videos_loc, search_term)):
+                        os.makedirs(os.path.join(videos_loc, search_term))
+                else:
+                    if not os.path.isdir(os.path.join(image_loc, search_term)):
+                        os.makedirs(os.path.join(image_loc, search_term))
+                left_images_download += 1
+                total_images_need += 1
+                t = threading.Thread(target=download_image, args=(image_url, location, i["id"], sema))
+                t.start()
+        else:
+            image_url = i["file_url"]
+
+            if '.gif' in image_url:
+                dot = ".gif"
+                location = os.path.join(gif_loc, search_term)
+            elif '.mp4' in image_url or '.mkv' in image_url:
+                dot = ".mp4"
+                location = os.path.join(videos_loc, search_term)
+            else:
+                dot = ".jpg"
+                location = os.path.join(image_loc, search_term)
+
+            # Iterate over the results and print them out
+            if (os.path.isdir(location)):
+                if (os.path.exists(os.path.join(location, f"{prefix}{i['id']}{dot}"))):
+                    skipped_ids.append(i['id'])
+                    yra = yra - 1
+                    continue
+                else:
+                    left_images_download += 1
+                    total_images_need += 1
+                    t = threading.Thread(target=download_image, args=(image_url, location, i["id"], sema))
+                    t.start()
+            else:
+                if dot == ".gif":
+                    if not os.path.isdir(os.path.join(gif_loc, search_term)):
+                        os.makedirs(os.path.join(gif_loc, search_term))
+                elif dot == ".mp4":
+                    if not os.path.isdir(os.path.join(videos_loc, search_term)):
+                        os.makedirs(os.path.join(videos_loc, search_term))
+                else:
+                    if not os.path.isdir(os.path.join(image_loc, search_term)):
+                        os.makedirs(os.path.join(image_loc, search_term))
+                left_images_download += 1
+                total_images_need += 1
+                t = threading.Thread(target=download_image, args=(image_url, location, i["id"], sema))
+                t.start()
+    # update_cache(entity, ats)
     msg.showinfo("Downloading", "Successfully started to download " + str(total_images_need) + " images!")
     logging.info(f"Download of {entity} started successfully.")
     logging.info(f"{yra} images downloading queued.")
     if len(skipped_ids) != 0:
         print("Skipped: " + str(len(skipped_ids)) + " images")
         logging.info(f"{len(skipped_ids)} images skipped.")
-    conn.close()
-def my_thread(tags):
+def my_thread(tags, tipas, end = -1, start = 0):
     atsakas = []
-    p = 0
+    p = start
     atsa = 0
     logging.info(f" --- Data fetching of {tags} started --- ")
     while True:
+        if end != -1:
+            if p == end:
+                info.configure(text=f"Found {atsa} content")
+                logging.info(f"{atsa} of {tags} found to download")
+                # Ask for confirmation
+                confirmation = msg.askyesno("Confirmation", f"{atsa} content found, start downloading process?")
+
+                # Check the user's response
+                if confirmation:
+                    logging.info(f"{atsa} of {tags} started queuing.")
+                    download(atsakas, tags, tipas)
+                    info.configure(text="")
+                    break
+                else:
+                    print(f"{tags} download cancelled")
+                    logging.info(f"{atsa} of {tags} cancelled")
+                    info.configure(text="")
+                    break
         try:
             ats = requests.get('https://api.rule34.xxx/index.php?page=dapi&tags=' + tags + '&s=post&q=index&json=1&limit=1000&pid=' + str(p))
         except requests.exceptions.SSLError:
@@ -257,7 +319,7 @@ def my_thread(tags):
                     # Check the user's response
                     if confirmation:
                         logging.info(f"{atsa} of {tags} started queuing.")
-                        download(atsakas, tags)
+                        download(atsakas, tags, tipas)
                         info.configure(text="")
                         break
                     else:
@@ -277,48 +339,43 @@ def my_thread(tags):
     logging.info(f" --- Data fetching of {tags} ended --- ")
 
 def data():
-    atsakas = []
     tags = text_1.get()
-    p = 0
+    tipas = type.get()
     print(tags)
     if (checkbox_1.get() == 1):
-        t = threading.Thread(target=my_thread, args=(tags,))
+        t = threading.Thread(target=my_thread, args=(tags,tipas,))
         t.start()
     else:
-        pagea = page.get()
-        if not pagea:
-            msg.showerror("CRITICAL", "Please enter an number to continue")
-        if 'kid' in tags:
-            errors.configure(text="This isn't allowed there!")
-            wl.warning(f"Your request of {tags} was rejected by filtering system that detected word: kid")
-            return
-        if 'child' in tags:
-            errors.configure(text="This isn't allowed there!")
-            wl.warning(f"Your request of {tags} was rejected by filtering system that detected word: child")
-            return
-        if pagea:
-            logging.info(f" --- Data fetching of {tags} started --- ")
-            p = str(pagea)
-            try:
-                ats = requests.get('https://api.rule34.xxx/index.php?page=dapi&tags=' + tags + '&s=post&q=index&json=1&limit=1000&pid=' + p)
-                if ats == "":
-                    errors.configure(text="No content was found!")
-                    logging.info(f"No content of {tags} was found")
-                    return
-                else:
-                    try:
-                        ats = ats.json()
-                        atsakas.extend(ats)
-                    except JSONDecodeError:
-                        errors.configure(text="No content was found!")
-                        logging.info(f"No content of {tags} was found")
-                        return
-            except requests.exceptions.SSLError:
-                errors.configure(text="Error code: 02")
-                return
-            download(atsakas, tags)
-    logging.info(f" --- Data fetching of {tags} ended --- ")
+        range_input = page.get()
+        if "-" in range_input:
+            range_values = range_input.split("-")
 
+            if len(range_values) != 2:
+                print("Invalid input. Please use the format 'start-end'.")
+                return
+            try:
+                start = int(range_values[0])
+                end = int(range_values[1])
+            except ValueError:
+                msg.showerror("Invalid input", "Please enter valid numbers.")
+                return
+            if start > end:
+                msg.showerror("Invalid range", "Start value should be less than end value.")
+                return
+            
+            t = threading.Thread(target=my_thread, args=(tags,tipas,end,start,))
+            t.start()
+        else:
+            try:
+                pagea = int(page.get())
+            except ValueError:
+                msg.showerror("CRITICAL", "You must enter number OR range number (start-end)")
+                return
+            if not pagea:
+                msg.showerror("CRITICAL", "Please enter how many pages you want to download")
+            else:
+                t = threading.Thread(target=my_thread, args=(tags,tipas,pagea,))
+                t.start()
 
 def toggle_entry_state():
     if checkbox_1.get() == True:
@@ -350,8 +407,19 @@ progress_txt.pack(pady=10, padx=10)
 text_1 = ctk.CTkEntry(master=frame_2, placeholder_text="What tags do you preffer?", width=300)
 text_1.pack(pady=10, padx=10)
 
-page = ctk.CTkEntry(master=frame_2, placeholder_text="Page to download", width=300)
+page = ctk.CTkEntry(master=frame_2, placeholder_text="How much pages to download", width=300)
 page.pack(pady=20, padx=10)
+
+tipai = [
+    "All",
+    "Images",
+    "Videos",
+    "Animations"
+]
+
+type = ctk.CTkComboBox(frame_2, values=tipai, state="readonly")
+type.set("All")
+type.pack(pady=20, padx=10)
 
 checkbox_1 = ctk.CTkCheckBox(master=frame_2, text="Download everything", command=toggle_entry_state)
 checkbox_1.pack(pady=10, padx=10)
