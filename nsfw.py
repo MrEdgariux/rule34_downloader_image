@@ -3,8 +3,8 @@ import json, requests, os, threading, sys, sqlite3, re, logging, configparser
 import customtkinter as ctk
 import tkinter.messagebox as msg
 
-version = "2.8"
-config_ver = "1.1"
+version = "2.9"
+config_ver = "1.2"
 
 def load_config():
     config = configparser.ConfigParser()
@@ -27,14 +27,18 @@ def create_config(ver, configver):
     config.set('File Paths', 'cache folder', os.path.join(roaming_folder, 'nsfw_project', 'cache'))
     config.add_section('File Naming')
     config.set('File Naming', 'prefix', 'image_')
+    config.add_section('Download')
+    config.set('Download', 'max threads', '16')
     with open('config.ini', 'w') as configfile:
         config.write(configfile)
 
 if os.path.exists("config.ini"):
     config = load_config()
     if config.get('Software', 'configversion') != config_ver:
+        config.clear()
         os.remove("config.ini")
         create_config(version, config_ver)
+        config = load_config()
 else:
     create_config(version, config_ver)
     config = load_config()
@@ -69,13 +73,14 @@ warn_handler.setLevel(logging.WARNING)
 warn_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
 warn_handler.setFormatter(warn_formatter)
 wl.addHandler(warn_handler)
+
+sema = threading.Semaphore(int(config.get('Download', 'max threads')))
 # -- End of config file loaders --
 
 left_images_download = 0
 total_images_need = 0
 ctk.set_appearance_mode("System")
 ctk.set_default_color_theme("blue")
-sema = threading.Semaphore(8)
 
 def sanitize_filename(filename):
     # Replace all characters that are not letters or digits with an underscore
@@ -158,6 +163,7 @@ def download(ats, search_term, tipas):
         left_images_download = 0
     yra = len(ats)
     skipped_ids = []
+    threads = []
     entity = search_term
     search_term = sanitize_filename(search_term)
 
@@ -197,7 +203,7 @@ def download(ats, search_term, tipas):
                     left_images_download += 1
                     total_images_need += 1
                     t = threading.Thread(target=download_image, args=(image_url, location, i["id"], sema))
-                    t.start()
+                    threads.append(t)
             else:
                 if dot == ".gif":
                     if not os.path.isdir(os.path.join(gif_loc, search_term)):
@@ -211,7 +217,7 @@ def download(ats, search_term, tipas):
                 left_images_download += 1
                 total_images_need += 1
                 t = threading.Thread(target=download_image, args=(image_url, location, i["id"], sema))
-                t.start()
+                threads.append(t)
         else:
             image_url = i["file_url"]
 
@@ -235,7 +241,7 @@ def download(ats, search_term, tipas):
                     left_images_download += 1
                     total_images_need += 1
                     t = threading.Thread(target=download_image, args=(image_url, location, i["id"], sema))
-                    t.start()
+                    threads.append(t)
             else:
                 if dot == ".gif":
                     if not os.path.isdir(os.path.join(gif_loc, search_term)):
@@ -249,14 +255,18 @@ def download(ats, search_term, tipas):
                 left_images_download += 1
                 total_images_need += 1
                 t = threading.Thread(target=download_image, args=(image_url, location, i["id"], sema))
-                t.start()
+                threads.append(t)
     # update_cache(entity, ats)
-    msg.showinfo("Downloading", "Successfully started to download " + str(total_images_need) + " images!")
+    logging.info(f"Starting all threads of {entity} - {len(threads)}...")
+    for thread in threads:
+        thread.start()
     logging.info(f"Download of {entity} started successfully.")
+    msg.showinfo("Downloading", "Successfully started to download " + str(total_images_need) + " images!")
     logging.info(f"{yra} images downloading queued.")
     if len(skipped_ids) != 0:
         print("Skipped: " + str(len(skipped_ids)) + " images")
         logging.info(f"{len(skipped_ids)} images skipped.")
+
 def my_thread(tags, tipas, end = -1, start = 0):
     atsakas = []
     p = start
@@ -308,7 +318,13 @@ def my_thread(tags, tipas, end = -1, start = 0):
         else:
             try:
                 atsj = ats.json()
-                atsakas.extend(atsj)
+                for item in atsj:
+                    atsj_2 = {
+                        "id": item['id'],
+                        "file_url": item['file_url']
+                    }
+                    atsakas.append(atsj_2)
+                    atsj_2 = None
                 if (len(atsj) < 1000):
                     atsa += len(atsj)
                     info.configure(text=f"Found {atsa} content")
@@ -327,6 +343,7 @@ def my_thread(tags, tipas, end = -1, start = 0):
                         logging.info(f"{atsa} of {tags} cancelled")
                         info.configure(text="")
                         break
+                atsj = None
                 p += 1
                 atsa += 1000
                 info.configure(text=f"{tags} - {atsa}")
