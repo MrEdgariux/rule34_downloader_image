@@ -1,10 +1,23 @@
 from json import JSONDecodeError
-import json, requests, os, threading, sys, sqlite3, re, logging, configparser
+import json, requests, os, threading, re, logging, configparser
+from time import monotonic
 import customtkinter as ctk
 import tkinter.messagebox as msg
+from win10toast import ToastNotifier
 
-version = "2.9"
-config_ver = "1.2"
+version = "2.9.2"
+config_ver = "1.2.1"
+
+
+image_formats = [
+    "jpg", "jpeg", "png", "gif", "bmp", "tiff", "webp", "svg", "ico",
+    "psd", "ai", "eps", "pdf", "raw", "indd", "xcf", "svgz"
+]
+
+video_formats = [
+    "mp4", "avi", "mkv", "mov", "wmv", "flv", "webm", "m4v", "3gp", "mpeg",
+    "mpg", "rm", "swf", "vob", "ogg", "ogv", "asf", "rmvb", "ts", "divx"
+]
 
 def load_config():
     config = configparser.ConfigParser()
@@ -19,6 +32,7 @@ def create_config(ver, configver):
     config.add_section('Software')
     config.set('Software', 'version', ver)
     config.set('Software', 'configversion', configver)
+    config.set('Software', 'enable notifications', 'True')
     config.add_section('File Paths')
     config.set('File Paths', 'image folder', os.path.join(script_directory, 'images'))
     config.set('File Paths', 'videos folder', os.path.join(script_directory, 'videos'))
@@ -27,6 +41,11 @@ def create_config(ver, configver):
     config.set('File Paths', 'cache folder', os.path.join(roaming_folder, 'nsfw_project', 'cache'))
     config.add_section('File Naming')
     config.set('File Naming', 'prefix', 'image_')
+    image_formats_str = ', '.join(image_formats)
+    video_formats_str = ', '.join(video_formats)
+    config.add_section('File Formats')
+    config.set('File Formats', 'image formats', image_formats_str)
+    config.set('File Formats', 'video formats', video_formats_str)
     config.add_section('Download')
     config.set('Download', 'max threads', '16')
     with open('config.ini', 'w') as configfile:
@@ -42,7 +61,6 @@ if os.path.exists("config.ini"):
 else:
     create_config(version, config_ver)
     config = load_config()
-
 
 # -- Begin of config file loaders --
 
@@ -75,6 +93,21 @@ warn_handler.setFormatter(warn_formatter)
 wl.addHandler(warn_handler)
 
 sema = threading.Semaphore(int(config.get('Download', 'max threads')))
+
+# Get the values from the 'File Formats' section
+image_formats_str = config.get('File Formats', 'image formats')
+video_formats_str = config.get('File Formats', 'video formats')
+
+# Convert the comma-separated strings back to lists
+image_formats = [format.strip() for format in image_formats_str.split(',')]
+video_formats = [format.strip() for format in video_formats_str.split(',')]
+
+enable_notifications = config.get('Software', 'enable notifications').lower() == 'true'
+if enable_notifications:
+    Notify = ToastNotifier()
+else:
+    Notify = None
+
 # -- End of config file loaders --
 
 left_images_download = 0
@@ -122,23 +155,38 @@ def update_cache(entity, data):
     cache['entity'][entity] = data
     save_cache(cache)
 
-def download_image(image_url, location, image_id, sema):
+def format_speed(speed):
+    if speed >= 1024*1024:
+        return f"{speed/(1024*1024):.2f} MB/s"
+    elif speed >= 1024:
+        return f"{speed/1024:.2f} KB/s"
+    else:
+        return f"{speed:.2f} bytes/s"
+
+def download_image(image_url, location, image_id, dot, sema):
     global left_images_download
     global total_images_need
     config = load_config()
     prefix = config.get("File Naming", 'prefix')
-    dot = ".jpg"
-    if '.gif' in image_url:
-        dot = ".gif"
-    elif '.mp4' in image_url or '.mkv' in image_url:
-        dot = ".mp4"
     failed = False
     try:
         sema.acquire()
-        img_data = requests.get(image_url).content
-        with open(os.path.join(location, f"{prefix}{image_id}{dot}"), "wb") as handler:
-            handler.write(img_data)
+        # Download the image and measure the real-time download speed
+        start_time = monotonic()
+        chunk_size = 1024
+        downloaded_size = 0
+        img_data = requests.get(image_url, stream=True)
         
+        # Save the image data to a file
+        with open(os.path.join(location, f"{prefix}{image_id}{dot}"), "wb") as handler:
+            for chunk in img_data.iter_content(chunk_size=chunk_size):
+                handler.write(chunk)
+                downloaded_size += len(chunk)
+                now = monotonic()
+                if now - start_time > 1:
+                    download_speed = downloaded_size / (now - start_time)
+                    print(f"Download speed: {format_speed(download_speed)}", end="\r")
+                    start_time = now
     except Exception as e:
         wl.warning(f"Failed to download image with id: {image_id} from source {image_url}")
         el.error(f"Error while downloading {image_id} : {e}")
@@ -148,7 +196,19 @@ def download_image(image_url, location, image_id, sema):
     finally:
         if not failed:
             left_images_download -= 1
-            progress_txt.configure(text="Download left: " + str(left_images_download))
+        if threading.active_count() > 1:
+            if left_images_download == 0:
+                if Notify is not None:
+                    Notify.show_toast("Rule 34", f"Downloaded {total_images_need} content", duration=5)
+                print("Downloaded all content")
+                logging.info(f"Downloaded all content")
+                total_images_need = 0
+                left_images_download = 0
+                progress_txt.configure(text=f"Downloaded all content")
+            else:
+                progress_txt.configure(text=f"Download left: {left_images_download}")
+        else:
+            progress_txt.configure(text=f"Download left: {left_images_download}")
         sema.release()
         
 
@@ -174,14 +234,19 @@ def download(ats, search_term, tipas):
     for i in ats:
         image_url = i['file_url']
         if tipas != "All":
-            if tipas == "Videos" and '.mp4' in image_url:
-                dot = ".mp4"
+            dot = None
+            if tipas == "Videos":
+                for format in video_formats:
+                    if format in image_url:
+                        dot = f".{format}"
                 if not os.path.isdir(os.path.join(videos_loc, search_term)):
                     os.makedirs(os.path.join(videos_loc, search_term))
                 location = os.path.join(videos_loc, search_term)
             
-            elif tipas == "Images" and '.jpg' in image_url:
-                dot = ".jpg"
+            elif tipas == "Images":
+                for format in image_formats:
+                    if format in image_url:
+                        dot = f".{format}"
                 if not os.path.isdir(os.path.join(image_loc, search_term)):
                     os.makedirs(os.path.join(image_loc, search_term))
                 location = os.path.join(image_loc, search_term)
@@ -192,6 +257,10 @@ def download(ats, search_term, tipas):
                     os.makedirs(os.path.join(gif_loc, search_term))
                 location = os.path.join(gif_loc, search_term)
             else:
+                print("Unsupported format:", image_url)
+                continue
+
+            if dot is None:
                 continue
 
             if (os.path.isdir(location)):
@@ -202,7 +271,7 @@ def download(ats, search_term, tipas):
                 else:
                     left_images_download += 1
                     total_images_need += 1
-                    t = threading.Thread(target=download_image, args=(image_url, location, i["id"], sema))
+                    t = threading.Thread(target=download_image, args=(image_url, location, i["id"], dot, sema))
                     threads.append(t)
             else:
                 if dot == ".gif":
@@ -216,56 +285,59 @@ def download(ats, search_term, tipas):
                         os.makedirs(os.path.join(image_loc, search_term))
                 left_images_download += 1
                 total_images_need += 1
-                t = threading.Thread(target=download_image, args=(image_url, location, i["id"], sema))
+                t = threading.Thread(target=download_image, args=(image_url, location, i["id"], dot, sema))
                 threads.append(t)
         else:
             image_url = i["file_url"]
+            dot = None
+            location = None
+
+            for format_list, loc in [(image_formats, image_loc), (video_formats, videos_loc)]:
+                for format in format_list:
+                    if format in image_url:
+                        dot = f".{format}"
+                        location = os.path.join(loc, search_term)
+                        break
 
             if '.gif' in image_url:
                 dot = ".gif"
                 location = os.path.join(gif_loc, search_term)
-            elif '.mp4' in image_url or '.mkv' in image_url:
-                dot = ".mp4"
-                location = os.path.join(videos_loc, search_term)
-            else:
-                dot = ".jpg"
-                location = os.path.join(image_loc, search_term)
 
-            # Iterate over the results and print them out
-            if (os.path.isdir(location)):
-                if (os.path.exists(os.path.join(location, f"{prefix}{i['id']}{dot}"))):
-                    skipped_ids.append(i['id'])
-                    yra = yra - 1
-                    continue
-                else:
-                    left_images_download += 1
-                    total_images_need += 1
-                    t = threading.Thread(target=download_image, args=(image_url, location, i["id"], sema))
-                    threads.append(t)
-            else:
+            if location is None:
+                print("Unsupported format:", image_url)
+                continue
+
+            if not os.path.isdir(location):
                 if dot == ".gif":
-                    if not os.path.isdir(os.path.join(gif_loc, search_term)):
-                        os.makedirs(os.path.join(gif_loc, search_term))
+                    os.makedirs(os.path.join(gif_loc, search_term))
                 elif dot == ".mp4":
-                    if not os.path.isdir(os.path.join(videos_loc, search_term)):
-                        os.makedirs(os.path.join(videos_loc, search_term))
+                    os.makedirs(os.path.join(videos_loc, search_term))
                 else:
-                    if not os.path.isdir(os.path.join(image_loc, search_term)):
-                        os.makedirs(os.path.join(image_loc, search_term))
-                left_images_download += 1
-                total_images_need += 1
-                t = threading.Thread(target=download_image, args=(image_url, location, i["id"], sema))
-                threads.append(t)
+                    os.makedirs(os.path.join(image_loc, search_term))
+
+            if os.path.exists(os.path.join(location, f"{prefix}{i['id']}{dot}")):
+                skipped_ids.append(i['id'])
+                yra -= 1
+                continue
+
+            left_images_download += 1
+            total_images_need += 1
+            t = threading.Thread(target=download_image, args=(image_url, location, i["id"], dot, sema))
+            threads.append(t)
     # update_cache(entity, ats)
     logging.info(f"Starting all threads of {entity} - {len(threads)}...")
     for thread in threads:
         thread.start()
     logging.info(f"Download of {entity} started successfully.")
-    msg.showinfo("Downloading", "Successfully started to download " + str(total_images_need) + " images!")
     logging.info(f"{yra} images downloading queued.")
     if len(skipped_ids) != 0:
-        print("Skipped: " + str(len(skipped_ids)) + " images")
-        logging.info(f"{len(skipped_ids)} images skipped.")
+        print("Skipped: " + str(len(skipped_ids)) + " content")
+        logging.info(f"{len(skipped_ids)} content skipped.")
+        if Notify is not None:
+            Notify.show_toast("Rule 34", f"Downloading {yra} content of {entity} and skipped {len(skipped_ids)} content", duration=5)
+    else:
+        if Notify is not None:
+            Notify.show_toast("Rule 34", f"Downloading {yra} content of {entity}", duration=5)
 
 def my_thread(tags, tipas, end = -1, start = 0):
     atsakas = []
@@ -298,22 +370,30 @@ def my_thread(tags, tipas, end = -1, start = 0):
             el.error("Failed to get API response.")
             el.error("Error code: 02")
             el.error("Error occured by: SSLError, no sertificate detected")
+            if Notify is not None:
+                Notify.show_toast("Rule 34", f"Error encountered while trying to get data from API", duration=5)
             break
         except requests.exceptions.ConnectionError:
             errors.configure(text="Error code: 03")
             el.error("Failed to get API response.")
             el.error("Error code: 03")
             el.error("Error occured by: ConnectionError, no available internet connection found")
+            if Notify is not None:
+                Notify.show_toast("Rule 34", f"Error encountered while trying to get data from API", duration=5)
             break
         except:
             errors.configure(text="Error code: 04") # This might occur internet blocking / firewall or something like this ;)
             el.error("Failed to get API response.")
             el.error("Error code: 04")
             el.error("Error occured by: No connection between available, maybe a firewall or just internet provider blocking the api")
+            if Notify is not None:
+                Notify.show_toast("Rule 34", f"Error encountered while trying to get data from API", duration=5)
             break
         if ats == "":
             errors.configure(text="No content was found!")
             logging.info(f"{tags} has no content to download")
+            if Notify is not None:
+                Notify.show_toast("Rule 34", f"No content was found", duration=5)
             break
         else:
             try:
