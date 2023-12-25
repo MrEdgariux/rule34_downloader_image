@@ -155,14 +155,6 @@ def update_cache(entity, data):
     cache['entity'][entity] = data
     save_cache(cache)
 
-def format_speed(speed):
-    if speed >= 1024*1024:
-        return f"{speed/(1024*1024):.2f} MB/s"
-    elif speed >= 1024:
-        return f"{speed/1024:.2f} KB/s"
-    else:
-        return f"{speed:.2f} bytes/s"
-
 def download_image(image_url, location, image_id, dot, sema):
     global left_images_download
     global total_images_need
@@ -171,22 +163,11 @@ def download_image(image_url, location, image_id, dot, sema):
     failed = False
     try:
         sema.acquire()
-        # Download the image and measure the real-time download speed
-        start_time = monotonic()
-        chunk_size = 1024
-        downloaded_size = 0
         img_data = requests.get(image_url, stream=True)
         
         # Save the image data to a file
         with open(os.path.join(location, f"{prefix}{image_id}{dot}"), "wb") as handler:
-            for chunk in img_data.iter_content(chunk_size=chunk_size):
-                handler.write(chunk)
-                downloaded_size += len(chunk)
-                now = monotonic()
-                if now - start_time > 1:
-                    download_speed = downloaded_size / (now - start_time)
-                    print(f"Download speed: {format_speed(download_speed)}", end="\r")
-                    start_time = now
+            handler.write(img_data.content)
     except Exception as e:
         wl.warning(f"Failed to download image with id: {image_id} from source {image_url}")
         el.error(f"Error while downloading {image_id} : {e}")
